@@ -204,6 +204,7 @@ void free_channel_p(void *c) {
 
 int send_reset_opt = 0;
 int multicast_ttl = 1;
+int init_chan_stop_opt = 0;
 struct in_addr output_intf = { .s_addr = INADDR_ANY };
 
 int connect_multicast(struct sockaddr_in send_to) {
@@ -273,6 +274,7 @@ RESTREAMER * new_restreamer(const char *name, CHANNEL *channel) {
 	r->channel = channel;
 	r->clientsock = -1;
 	r->dst_sockname = sockname;
+	r->hibernate = init_chan_stop_opt;
 	pthread_rwlock_init(&r->lock, NULL);
 	connect_destination(r);
 	r->last_decrypted_input_ts = get_time();
@@ -640,12 +642,55 @@ int check_restreamer_state(RESTREAMER *r) {
 		proxy_set_status(r, "Dying");
 		return 2;
 	}
+	if (r->hibernate) {
+		proxy_set_status(r, "Hibernating");
+		return 3;
+	}
 	if (r->reconnect) {
 		LOGf("PROXY: Forced reconnect on srv_fd: %i | Channel: %s Source: %s\n", r->sock, r->channel->name, r->channel->source);
 		proxy_set_status(r, "Forced reconnect");
 		return 1;
 	}
 	return 0;
+}
+
+/*
+	Returns:
+		-1 = channel not found
+		 0 = channel not changed the hibernation status
+		 N = channel updated
+*/
+int set_hibernate(int k, const char *channel) {
+	int found = -1;
+	int i = 0;
+	LNODE *lr, *lrtmp;
+	list_lock(config.restreamer);
+	list_for_each(config.restreamer, lr, lrtmp)
+	{
+		RESTREAMER *r = lr->data;
+		i++;
+		if(strcmp(r->channel->name,channel) == 0)
+		{
+			found = i;
+			if (!r->hibernate && k == 1) {
+				r->hibernate = 1;
+				proxy_set_status(r, "Hibernating");
+				break;
+			}
+			if (r->hibernate && k == 0) {
+				r->hibernate = 0;
+				r->reconnect = 1;
+				LOGf("DEBUG: restarting from hibernation | Channel: %s\n", r->channel->name);
+				proxy_set_status(r, "Reconnecting");
+				break;
+			}
+			found = 0;
+			break;
+		}
+	}
+	list_unlock(config.restreamer);
+	//LOGf("DEBUG: Call to set_hibernate(%i,%s) and return: %i\n", k, channel, found);
+	return found;
 }
 
 #define MAX_ZERO_READS 3
@@ -873,10 +918,15 @@ void * proxy_ts_stream(void *self) {
 
 	signal(SIGPIPE, SIG_IGN);
 
+	proxy_set_status(r, "Initialized");
 	int http_code = 0;
 	while (1) {
 		r->conn_ts = 0;
 		r->read_bytes = 0;
+		if (r->hibernate) {
+			sleep(1);
+			continue;
+		}
 
 		int result = connect_source(self, 1, FRAME_PACKET_SIZE * 1000, &http_code, r->channel->source, 0);
 		if (result > 0)
@@ -895,6 +945,7 @@ void * proxy_ts_stream(void *self) {
 			switch (check_restreamer_state(r)) {
 				case 1: goto RECONNECT;		// r->reconnect is on
 				case 2: goto QUIT;			// r->dienow is on
+				case 3: goto HIBERNATE;		// r->hibernate is on
 			}
 			if (sproto == tcp_sock) {
 				readen = fdread_ex(r->sock, buf, FRAME_PACKET_SIZE, TCP_READ_TIMEOUT, TCP_READ_RETRIES, 1);
@@ -961,6 +1012,14 @@ RECONNECT:
 		shutdown_fd(&(r->sock));
 		next_channel_source(r->channel);
 		continue;
+HIBERNATE:
+		pthread_rwlock_wrlock(&r->lock);
+		r->conn_ts = 0;
+		pthread_rwlock_unlock(&r->lock);
+		LOGf("DEBUG: hibernation stop srv_fd: %i | Channel: %s\n", r->sock, r->channel->name);
+		proxy_set_status(r, "Hibernated");
+		shutdown_fd(&(r->sock));
+		continue;
 QUIT:
 		LOGf("DEBUG: quit srv_fd: %i | Channel: %s\n", r->sock, r->channel->name);
 		break;
@@ -991,6 +1050,7 @@ void show_usage(int ident_only) {
 	puts("\t-L port\t\tSyslog port (default: 514)");
 	puts("\t-R\t\tSend reset packets when changing sources.");
 	puts("\t-E\t\tDetect encrypted input (default: false)");
+	puts("\t-I\t\tHibernate channels at start (default: false)");
 	puts("");
 	puts("  Web server options:");
 	puts("\t-b addr\t\tLocal IP address to bind.   (default: 0.0.0.0)");
@@ -1014,7 +1074,7 @@ void parse_options(int argc, char **argv, struct config *cfg) {
 	cfg->server_socket = -1;
 	cfg->logport = 514;
 	pthread_mutex_init(&cfg->channels_lock, NULL);
-	while ((j = getopt(argc, argv, "i:b:p:c:d:t:o:l:L:REHh")) != -1) {
+	while ((j = getopt(argc, argv, "i:b:p:c:d:t:o:l:L:REIHh")) != -1) {
 		switch (j) {
 			case 'b':
 				cfg->server_addr = optarg;
@@ -1054,6 +1114,9 @@ void parse_options(int argc, char **argv, struct config *cfg) {
 			case 'E':
 				cfg->detect_encrypted_input = 1;
 				break;
+			case 'I':
+				init_chan_stop_opt = 1;
+				break;
 			case 'H':
 			case 'h':
 				show_usage(0);
@@ -1087,6 +1150,8 @@ void parse_options(int argc, char **argv, struct config *cfg) {
 		printf("\tSend reset packets.\n");
 	if (cfg->detect_encrypted_input)
 		printf("\tDetect encrypted input.\n");
+	if (init_chan_stop_opt)
+		printf("\tStart channels in hibernation.\n");
 	if (cfg->pidfile) {
 		printf("\tDaemonize         : %s\n", cfg->pidfile);
 	} else {

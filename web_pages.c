@@ -31,6 +31,7 @@
 #include "config.h"
 
 extern struct config *config;
+extern int set_hibernate(int k, const char *channel);
 
 void cmd_index(int clientsock) {
 	send_200_ok(clientsock);
@@ -64,10 +65,10 @@ void cmd_status(int clientsock) {
 		RESTREAMER *r = l->data;
 		pthread_rwlock_rdlock(&r->lock);
 		snprintf(dest, sizeof(dest), "%s:%d", r->channel->dest_host, r->channel->dest_port);
-		if (r->connected && r->conn_ts > 0 && r->read_bytes >= 1316)
+		if (r->connected && r->conn_ts > 0 && r->read_bytes >= 1316 && !r->hibernate)
 			conn_status = 1;
 		fdputsf(clientsock, "%-10s %-20s %8lu %10llu %-18s %-64s %s\n",
-			conn_status ? "CONN_OK" : "CONN_ERROR",
+			conn_status ? "CONN_OK" : r->hibernate ? "HIBERNATE" : "CONN_ERROR",
 			dest,
 			r->conn_ts ? now - r->conn_ts : 0,
 			r->read_bytes,
@@ -124,4 +125,44 @@ void cmd_reload(int clientsock) {
 	send_header_textplain(clientsock);
 	fdputs(clientsock, "\nReloading config\n");
 	do_reconf(1);
+}
+
+void cmd_start(int clientsock, const char *uri) {
+	if(uri[5] == '/') {
+		struct config *cfg = get_config();
+		pthread_mutex_lock(&cfg->channels_lock);
+		int ret = set_hibernate(0,uri+6);
+		pthread_mutex_unlock(&cfg->channels_lock);
+		if (ret > 0) {
+			send_200_ok(clientsock);
+			send_header_textplain(clientsock);
+			fdputs(clientsock, "\nok\n");
+			return;
+		}
+		if (ret == 0) {
+			send_403_forbidden(clientsock);
+			return;
+		}
+	}
+	send_404_not_found(clientsock);
+}
+
+void cmd_stop(int clientsock, const char *uri) {
+	if(uri[4] == '/') {
+		struct config *cfg = get_config();
+		pthread_mutex_lock(&cfg->channels_lock);
+		int ret = set_hibernate(1,uri+5);
+		pthread_mutex_unlock(&cfg->channels_lock);
+		if (ret > 0) {
+			send_200_ok(clientsock);
+			send_header_textplain(clientsock);
+			fdputs(clientsock, "\nok\n");
+			return;
+		}
+		if (ret == 0) {
+			send_403_forbidden(clientsock);
+			return;
+		}
+	}
+	send_404_not_found(clientsock);
 }
