@@ -26,16 +26,28 @@ The following endpoints are accessible:
   Reload config file. This would start/stop new/removed channels.
 
 
+    http://127.0.0.1:8081/stop/chan1
+
+  Hibernates the channel "chan1". If it's already paused,
+  it does nothing.
+
+
+    http://127.0.0.1:8081/start/chan1
+
+  If the "chan1" channel is hibernating, it restarts it. If it's
+  already running, it does nothing.
+
+
     http://127.0.0.1:8081/status
 
   Return current channels status. The status looks like this:
 
 # Status   DestAddr             ConnTime  ReadBytes ChanName           ChanSource                                                       ProxyStatus
 CONN_OK    239.78.78.78:5000         123     148708 chan1              http://example.com:8080/stb/chan1.mpg                            Synced
-CONN_ERROR 239.79.79.79:5000          60      65800 chan2              http://ux.iptv.bg:8080/stb/chan2.mpg                             Synced
-CONN_ERROR 239.80.80.80:5000           0          0 chan3              udp://239.1.2.3:5000/                                            Connected
+HIBERNATE  239.79.79.79:5000           0          0 chan2              http://ux.iptv.bg:8080/stb/chan2.mpg                             Initialized
+CONN_ERROR 239.80.80.80:5000          60      65800 chan3              udp://239.1.2.3:5000/                                            Connected
 
-  "Status" - current channel status which can be CONN_OK or CONN_ERROR
+  "Status" - current channel status which can be CONN_OK or CONN_ERROR or HIBERNATE
 
     CONN_ERROR - Means that the source of the channel is currently
                  not connected or bytes read are at least 1316 or
@@ -43,10 +55,13 @@ CONN_ERROR 239.80.80.80:5000           0          0 chan3              udp://239
 
   "ProxyStatus" - Last connection status
 
+    Initialized
     Connected
     Working
+    Hibernated
 
     Reconnecting
+    Hibernating
 
     Dying
     Forced reconnect
