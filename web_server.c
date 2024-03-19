@@ -136,6 +136,10 @@ void *process_web_request(void *in_req) {
 		cmd_reload(clientsock);
 	} else if (strstr(path,"status")==path) {
 		cmd_status(clientsock);
+	} else if (strstr(path,"start")==path) {
+		cmd_start(clientsock,path);
+	} else if (strstr(path,"stop")==path) {
+		cmd_stop(clientsock,path);
 	} else {
 		send_404_not_found(clientsock);
 	}
