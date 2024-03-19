@@ -23,5 +23,7 @@ void cmd_status(int clientsock);
 void cmd_getconfig(int clientsock);
 void cmd_reconnect(int clientsock);
 void cmd_reload(int clientsock);
+void cmd_start(int clientsock, const char *uri);
+void cmd_stop(int clientsock, const char *uri);
 
 #endif
